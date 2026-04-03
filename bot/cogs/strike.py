@@ -80,6 +80,22 @@ class Strike(commands.Cog):
                 return
 
 
+    # show strikes of member
+    @discord.app_commands.command(name="showstrikes", description="Show strikes of member")
+    async def showstrikes(self, interaction: discord.Interaction, member: discord.Member):
+        memberId = str(member.id)
+        memberName = str(member.display_name)
+
+        # member does not exist
+        if not await self.checkMember(memberId):
+            await interaction.response.send_message(f"{memberName} must be added first.")
+            return
+
+        strikes = await self.getStrikes(memberId)
+        await interaction.response.send_message(f"{memberName} has {strikes} strike(s).")
+
+
+
     # check if member exists in database
     async def checkMember(self, memberId):
         async with get_db() as db:
@@ -89,6 +105,17 @@ class Strike(commands.Cog):
                 row = await cursor.fetchone()
 
         return row is not None
+
+
+    # get strikes for member
+    async def getStrikes(self, memberId):
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT COUNT(id) FROM strike WHERE memberId = ? AND status = 'accepted' AND honored = '0000-00-00'", [memberId]
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        return row[0]
 
 
     # insert data into database
