@@ -80,6 +80,17 @@ class Strike(commands.Cog):
                 return
 
 
+    # show help
+    @discord.app_commands.command(name="help", description="Show available commands")
+    async def help(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="Strike Bot Commands")
+        embed.add_field(name="/addmember <member>", value="Add a member to the bot.", inline=False)
+        embed.add_field(name="/addstrike <member> [strikes]", value="Start a 24h poll to give a member one or more strikes. Defaults to 1 strike.", inline=False)
+        embed.add_field(name="/showstrikes <member>", value="Show the number of accepted strikes a member has.", inline=False)
+        embed.add_field(name="/help", value="Show this help message.", inline=False)
+        await interaction.response.send_message(embed=embed)
+
+
     # show strikes of member
     @discord.app_commands.command(name="showstrikes", description="Show strikes of member")
     async def showstrikes(self, interaction: discord.Interaction, member: discord.Member):
