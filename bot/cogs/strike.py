@@ -19,13 +19,14 @@ class Strike(commands.Cog):
     @discord.app_commands.command(name="addmember", description="Add a member")
     async def addmember(self, interaction: discord.Interaction, member: discord.Member):
         memberId = str(member.id)
+        guildId = str(interaction.guild_id)
         memberName = str(member.display_name)
 
-        if await self.checkMember(memberId):
+        if await self.getUserId(memberId, guildId):
             await interaction.response.send_message(f"{memberName} already exists.")
 
         else:
-            await self.insertData("member", ["id"], [memberId])
+            await self.insertData("user", ["memberId", "guildId"], [memberId, guildId])
             await interaction.response.send_message(f"{memberName} has been added.")
 
 
@@ -33,6 +34,7 @@ class Strike(commands.Cog):
     @discord.app_commands.command(name="addstrike", description="Start poll to vote on strike")
     async def addstrike(self, interaction: discord.Interaction, member: discord.Member, strikes: int = DEFAULT_STRIKES):
         memberId = str(member.id)
+        guildId = str(interaction.guild_id)
         memberName = str(member.display_name)
         nrOfStrikes = strikes
 
@@ -40,8 +42,10 @@ class Strike(commands.Cog):
             await interaction.response.send_message(f"{MAX_STRIKES} is the maximum number of strikes.")
             return
 
+        userId = await self.getUserId(memberId, guildId)
+
         # member does not exist
-        if not await self.checkMember(memberId):
+        if not userId:
             await interaction.response.send_message(f"{memberName} must be added first.")
             return
 
@@ -58,17 +62,18 @@ class Strike(commands.Cog):
         messageId = message.id
 
         # create strike for member
-        await self.insertData("strike", ["memberId", "messageId"], [memberId, messageId])
+        await self.insertData("strike", ["userId", "messageId"], [userId, messageId])
 
 
     # listen for votes
     @commands.Cog.listener()
     async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent):
         memberId = str(payload.user_id)
+        guildId = str(payload.guild_id)
         print(f"Vote received from {memberId}")
 
         # ignore votes from non-members
-        if not await self.checkMember(memberId):
+        if not await self.getUserId(memberId, guildId):
             return
 
         channel = self.bot.get_channel(payload.channel_id)
@@ -82,7 +87,7 @@ class Strike(commands.Cog):
         for pollAnswer in poll.answers:
             memberVotes = 0
             async for voter in pollAnswer.voters():
-                if await self.checkMember(str(voter.id)):
+                if await self.getUserId(str(voter.id), guildId):
                     memberVotes += 1
 
             if memberVotes > memberTotal / 2:
@@ -96,7 +101,7 @@ class Strike(commands.Cog):
     @discord.app_commands.command(name="help", description="Show available commands")
     async def help(self, interaction: discord.Interaction):
         embed = discord.Embed(title="Strike Bot Commands")
-        embed.add_field(name="/addmember <member>", value="Add a member to the bot.", inline=False)
+        embed.add_field(name="/adduser <member>", value="Add a member to the bot.", inline=False)
         embed.add_field(name="/addstrike <member> [strikes]", value=f"Start a {POLL_DURATION_HOURS}-hour poll to give a member one or more strikes. Defaults to {DEFAULT_STRIKES}, maximum is {MAX_STRIKES}.", inline=False)
         embed.add_field(name="/showstrikes <member>", value="Show the number of accepted strikes a member has.", inline=False)
         embed.add_field(name="/help", value="Show this help message.", inline=False)
@@ -107,34 +112,36 @@ class Strike(commands.Cog):
     @discord.app_commands.command(name="showstrikes", description="Show strikes of member")
     async def showstrikes(self, interaction: discord.Interaction, member: discord.Member):
         memberId = str(member.id)
+        guildId = str(interaction.guild_id)
         memberName = str(member.display_name)
 
         # member does not exist
-        if not await self.checkMember(memberId):
+        userId = await self.getUserId(memberId, guildId)
+        if not userId:
             await interaction.response.send_message(f"{memberName} must be added first.")
             return
 
-        nrOfStrikes = await self.getStrikes(memberId)
+        nrOfStrikes = await self.getStrikes(userId)
         await interaction.response.send_message(f"{memberName} has {nrOfStrikes} strike(s).")
 
 
 
-    # check if member exists in database
-    async def checkMember(self, memberId):
+    # get user id
+    async def getUserId(self, memberId, guildId):
         async with get_db() as db:
             async with db.execute(
-                "SELECT id FROM member WHERE id = ? AND deleted = 'no'", [memberId]
+                "SELECT id FROM user WHERE memberId = ? AND guildId = ? AND deleted = 'no'", [memberId, guildId]
             ) as cursor:
                 row = await cursor.fetchone()
 
-        return row is not None
+        return row[0] if row else None
 
 
-    # get strikes for member
-    async def getStrikes(self, memberId):
+    # get strikes for user
+    async def getStrikes(self, userId):
         async with get_db() as db:
             async with db.execute(
-                "SELECT COUNT(id) FROM strike WHERE memberId = ? AND status = 'accepted' AND honored = '0000-00-00'", [memberId]
+                "SELECT COUNT(id) FROM strike WHERE userId = ? AND status = 'accepted' AND honored = '0000-00-00'", [userId]
             ) as cursor:
                 row = await cursor.fetchone()
 
@@ -168,7 +175,7 @@ class Strike(commands.Cog):
     async def getMemberTotal(self):
         async with get_db() as db:
             async with db.execute(
-                "SELECT COUNT(id) FROM member WHERE deleted = 'no'"
+                "SELECT COUNT(id) FROM user WHERE deleted = 'no'"
             ) as cursor:
                 row = await cursor.fetchone()
 
