@@ -125,7 +125,6 @@ class Strike(commands.Cog):
         await interaction.response.send_message(f"{memberName} has {nrOfStrikes} strike(s).")
 
 
-
     # get user id
     async def getUserId(self, memberId, guildId):
         async with get_db() as db:
