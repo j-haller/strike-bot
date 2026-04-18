@@ -6,6 +6,8 @@ services:
     env_file: .env
     profiles: ["prod"]
     restart: unless-stopped
+    volumes:
+      - ./data:/app/data
 
   bot-dev:
     build:
