@@ -8,8 +8,12 @@ MAX_STRIKES = 5
 POLL_ANSWER_YES = "Yes"
 POLL_ANSWER_NO = "No"
 POLL_DURATION_HOURS = 1
-STRIKE_STATUS_ACCEPTED = 'accepted'
-STRIKE_STATUS_REJECTED = 'rejected'
+POLL_TYPE_ADD = 'add'
+POLL_TYPE_HONOR = 'honor'
+POLL_STATUS_PENDING = 'pending'
+POLL_STATUS_ACCEPTED = 'accepted'
+POLL_STATUS_REJECTED = 'rejected'
+USER_DELETED_NO = 'no'
 
 class Strike(commands.Cog):
     def __init__(self, bot):
@@ -22,23 +26,23 @@ class Strike(commands.Cog):
         guildId = str(interaction.guild_id)
         memberName = str(member.display_name)
 
+        # check if member is already in database
         if await self.getUserId(memberId, guildId):
             await interaction.response.send_message(f"{memberName} already exists.")
 
         else:
-            await self.insertData("user", ["memberId", "guildId"], [memberId, guildId])
+            await self.insertData("user", ["member_id", "guild_id"], [memberId, guildId])
             await interaction.response.send_message(f"{memberName} has been added.")
 
 
     # add strike to a member using poll
-    @discord.app_commands.command(name="addstrike", description="Start poll to vote on strike")
+    @discord.app_commands.command(name="addstrike", description="Start poll to vote on strike(s)")
     async def addstrike(self, interaction: discord.Interaction, member: discord.Member, strikes: int = DEFAULT_STRIKES):
         memberId = str(member.id)
         guildId = str(interaction.guild_id)
         memberName = str(member.display_name)
-        nrOfStrikes = strikes
 
-        if nrOfStrikes > MAX_STRIKES:
+        if strikes > MAX_STRIKES:
             await interaction.response.send_message(f"{MAX_STRIKES} is the maximum number of strikes.")
             return
 
@@ -51,18 +55,58 @@ class Strike(commands.Cog):
 
         # create poll
         poll = discord.Poll(
-            question=f"Should {memberName} receive {nrOfStrikes} strike(s)?",
+            question=f"Should {memberName} receive {strikes} strike(s)?",
             duration=dt.timedelta(hours=POLL_DURATION_HOURS)
         )
         poll.add_answer(text=POLL_ANSWER_YES)
         poll.add_answer(text=POLL_ANSWER_NO)
 
+
         await interaction.response.send_message(poll=poll)
         message = await interaction.original_response()
         messageId = message.id
 
-        # create strike for member
-        await self.insertData("strike", ["userId", "messageId"], [userId, messageId])
+        # create poll record
+        await self.insertData("poll",
+                              ["poll_type", "user_id", "strikes", "message_id", "guild_id"],
+                              [POLL_TYPE_ADD, userId, strikes, messageId, guildId])
+
+
+    # honor strike of a member using poll
+    @discord.app_commands.command(name="honorstrike", description="Start poll to vote on honored strike(s)")
+    async def honorstrike(self, interaction: discord.Interaction, member: discord.Member, strikes: int = DEFAULT_STRIKES):
+        memberId = str(member.id)
+        guildId = str(interaction.guild_id)
+        memberName = str(member.display_name)
+
+        if strikes > MAX_STRIKES:
+            await interaction.response.send_message(f"{MAX_STRIKES} is the maximum number of honored strikes.")
+            return
+
+        userId = await self.getUserId(memberId, guildId)
+
+        # member does not exist
+        if not userId:
+            await interaction.response.send_message(f"{memberName} must be added first.")
+            return
+
+        # create poll
+        poll = discord.Poll(
+            question=f"Has {memberName} honored {strikes} strike(s)?",
+            duration=dt.timedelta(hours=POLL_DURATION_HOURS)
+        )
+        poll.add_answer(text=POLL_ANSWER_YES)
+        poll.add_answer(text=POLL_ANSWER_NO)
+
+
+        await interaction.response.send_message(poll=poll)
+        message = await interaction.original_response()
+        messageId = message.id
+
+        # create poll record
+        await self.insertData("poll",
+                              ["poll_type", "user_id", "strikes", "message_id", "guild_id"],
+                              [POLL_TYPE_HONOR, userId, strikes, messageId, guildId])
 
 
     # listen for votes
@@ -70,7 +114,6 @@ class Strike(commands.Cog):
     async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent):
         memberId = str(payload.user_id)
         guildId = str(payload.guild_id)
-        print(f"Vote received from {memberId}")
 
         # ignore votes from non-members
         if not await self.getUserId(memberId, guildId):
@@ -87,13 +130,41 @@ class Strike(commands.Cog):
         for pollAnswer in poll.answers:
             memberVotes = 0
             async for voter in pollAnswer.voters():
-                if await self.getUserId(str(voter.id), guildId):
+                if await self.getUserId(memberId, guildId):
                     memberVotes += 1
 
+            # poll result is irreversible
             if memberVotes > memberTotal / 2:
                 await poll.end()
-                print(f"{pollAnswer.text}")
-                await self.updateStrike(pollAnswer.text, messageId)
+
+                status = POLL_STATUS_ACCEPTED if pollAnswer.text == POLL_ANSWER_YES else POLL_STATUS_REJECTED
+                row = await self.getPoll(messageId, guildId)
+
+                # poll not in database (should not happen)
+                if not row:
+                    await interaction.response.send_message("Poll not found")
+                    return
+
+                pollId, pollType, userId, strikes = row
+
+                await self.updatePoll(pollId, status)
+
+                # poll rejected: do nothing
+                if status == POLL_STATUS_REJECTED:
+                    return
+
+                if pollType == POLL_TYPE_ADD:
+
+                    # create strike(s)
+                    await self.insertData("strike",
+                                        ["user_id", "poll_id_created"],
+                                        [userId, pollId],
+                                          strikes)
+
+                    # honor strike(s)
+                elif pollType == POLL_TYPE_HONOR:
+                    await self.honorStrike(pollId, userId, strikes)
+
                 return
 
 
@@ -103,6 +174,7 @@ class Strike(commands.Cog):
         embed = discord.Embed(title="Strike Bot Commands")
         embed.add_field(name="/adduser <member>", value="Add a member to the bot.", inline=False)
         embed.add_field(name="/addstrike <member> [strikes]", value=f"Start a {POLL_DURATION_HOURS}-hour poll to give a member one or more strikes. Defaults to {DEFAULT_STRIKES}, maximum is {MAX_STRIKES}.", inline=False)
+        embed.add_field(name="/honorstrike <member> [strikes]", value=f"Start a {POLL_DURATION_HOURS}-hour poll to honor one or more strikes of a member. Defaults to {DEFAULT_STRIKES}, maximum is {MAX_STRIKES}.", inline=False)
         embed.add_field(name="/showstrikes [member]", value="Show accepted strikes for a member, or all members if none specified.", inline=False)
         embed.add_field(name="/help", value="Show this help message.", inline=False)
         await interaction.response.send_message(embed=embed)
@@ -122,8 +194,9 @@ class Strike(commands.Cog):
                 await interaction.response.send_message(f"{memberName} must be added first.")
                 return
 
-            nrOfStrikes = await self.getStrikes(userId)
-            await interaction.response.send_message(f"{memberName} has {nrOfStrikes} strike(s).")
+            strikes = await self.getStrikes(userId)
+            await interaction.response.send_message(f"{memberName} has {strikes} strike(s).")
+
         else:
             rows = await self.getAllStrikes(guildId)
             if not rows:
@@ -142,18 +215,41 @@ class Strike(commands.Cog):
     async def getUserId(self, memberId, guildId):
         async with get_db() as db:
             async with db.execute(
-                "SELECT id FROM user WHERE memberId = ? AND guildId = ? AND deleted = 'no'", [memberId, guildId]
+                """SELECT u.id
+                   FROM user u
+                   WHERE u.member_id = ?
+                   AND u.guild_id = ?
+                   AND u.deleted = ?""",
+                [memberId, guildId, USER_DELETED_NO]
             ) as cursor:
                 row = await cursor.fetchone()
 
         return row[0] if row else None
 
 
+    # get poll
+    async def getPoll(self, messageId, guildId):
+        async with get_db() as db:
+            async with db.execute(
+                """SELECT p.id, p.poll_type, p.user_id, p.strikes
+                   FROM poll p
+                   WHERE p.message_id = ?
+                   AND p.guild_id = ?
+                   AND p.status = ?""",
+                [messageId, guildId, POLL_STATUS_PENDING]
+            ) as cursor:
+                return await cursor.fetchone()
+
+
     # get strikes for user
     async def getStrikes(self, userId):
         async with get_db() as db:
             async with db.execute(
-                "SELECT COUNT(id) FROM strike WHERE userId = ? AND status = 'accepted' AND honored = '0000-00-00'", [userId]
+                """SELECT COUNT(s.id)
+                   FROM strike s
+                   WHERE s.user_id = ?
+                   AND s.poll_id_honored IS NULL""",
+                [userId]
             ) as cursor:
                 row = await cursor.fetchone()
 
@@ -161,24 +257,41 @@ class Strike(commands.Cog):
 
 
     # insert data into database
-    async def insertData(self, table, columns, values):
-        placeholders = ', '.join(['?'] * len(values))
+    async def insertData(self, table, columns, values, repeat=1):
         cols = ', '.join(columns)
+        placeholders = ', '.join(['?'] * len(values))
 
         async with get_db() as db:
-            await db.execute(
-                f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", values
+            await db.executemany(
+                f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
+                [values] * repeat
             )
             await db.commit()
 
 
-    # update strike based on result of poll
-    async def updateStrike(self, result, messageId):
-
-        status = STRIKE_STATUS_ACCEPTED if result == POLL_ANSWER_YES else STRIKE_STATUS_REJECTED
+    # update poll
+    async def updatePoll(self, pollId, status):
         async with get_db() as db:
             await db.execute(
-                "UPDATE strike SET status = ? WHERE messageId = ?", [status, messageId]
+                """UPDATE poll
+                   SET status = ?
+                   WHERE id = ?""",
+                [pollId, status]
+            )
+            await db.commit()
+
+
+    # honor strike
+    async def honorStrike(self, pollId, userId, strikes):
+        async with get_db() as db:
+            await db.execute(
+                """UPDATE strike
+                   SET poll_id_honored = ?
+                   WHERE user_id = ?
+                   AND poll_id_honored IS NULL
+                   ORDER BY id
+                   LIMIT ?""",
+                [pollId, userId, strikes]
             )
             await db.commit()
 
@@ -187,11 +300,15 @@ class Strike(commands.Cog):
     async def getAllStrikes(self, guildId):
         async with get_db() as db:
             async with db.execute(
-                """SELECT u.memberId, COUNT(s.id)
+                """SELECT u.member_id, COUNT(s.id)
                    FROM user u
-                   LEFT JOIN strike s ON s.userId = u.id AND s.status = 'accepted' AND s.honored = '0000-00-00'
-                   WHERE u.guildId = ? AND u.deleted = 'no'
-                   GROUP BY u.id""", [guildId]
+                   LEFT JOIN strike s
+                   ON s.user_id = u.id
+                   AND s.poll_id_honored IS NULL
+                   WHERE u.guild_id = ?
+                   AND u.deleted = 'no'
+                   GROUP BY u.id""",
+                [guildId]
             ) as cursor:
                 return await cursor.fetchall()
 
@@ -200,7 +317,9 @@ class Strike(commands.Cog):
     async def getMemberTotal(self):
         async with get_db() as db:
             async with db.execute(
-                "SELECT COUNT(id) FROM user WHERE deleted = 'no'"
+                """SELECT COUNT(u.id)
+                    FROM user u
+                    WHERE u.deleted = 'no'"""
             ) as cursor:
                 row = await cursor.fetchone()
 

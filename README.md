@@ -12,6 +12,7 @@ When a strike is proposed against a member, a poll is created in the channel. Re
 |---|---|
 | `/addmember <member>` | Register a server member so they can vote and receive strikes |
 | `/addstrike <member> [strikes]` | Start a poll to give a member strikes (default: 1, max: 5) |
+| `/honorstrike <member> [strikes]` | Start a poll to honor a member's strikes (default: 1, max: 5) |
 | `/showstrikes [member]` | Show accepted strikes for a member, or all members if none specified |
 | `/help` | Show available commands |
 
