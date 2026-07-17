@@ -61,6 +61,7 @@ docker compose --profile prod up -d
 
 SQLite is used for persistence. The schema is initialized automatically on startup from `db/schema.sql`.
 
-Two tables are used:
+Three tables are used:
 - `user` — registered guild members
-- `strike` — strike records with status (`pending`, `accepted`, `rejected`)
+- `strike` — strike records
+- `poll` — polls with status (`pending`, `accepted`, `rejected`)
